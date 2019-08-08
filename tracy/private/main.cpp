@@ -3,7 +3,6 @@
 #include <stdint.h>
 #include <glm.hpp>
 #include "stb_image_write.h"
-#include "math.h"
 
 struct Ray
 {
@@ -18,7 +17,7 @@ struct HitInfo
 
 struct Material
 {
-  enum Type { DIFFUSE, SPECULAR };
+  enum Type { DIFFUSE, SPECULAR, DIELECTRIC };
   Type type;
   glm::vec3 albedo = glm::vec3(1.0f);
   glm::vec3 emissive = glm::vec3(0.0f);
@@ -112,24 +111,16 @@ Material diffuseWhite = { Material::DIFFUSE, glm::vec3(.75,.75,.75), glm::vec3()
 Material diffuseRed = { Material::DIFFUSE, glm::vec3(.75,.25,.25), glm::vec3() };
 Material diffuseBlue = { Material::DIFFUSE, glm::vec3(.25,.25,.75), glm::vec3() };
 Material diffuseGreen = { Material::DIFFUSE, glm::vec3(.25,.75,.25), glm::vec3() };
-Material mirror = { Material::SPECULAR, glm::vec3(0.99f), glm::vec3() };
+Material mirror = { Material::SPECULAR, glm::vec3(0.999f), glm::vec3() };
+Material glass = { Material::DIELECTRIC, glm::vec3(0.999f), glm::vec3() };
 Material light = { Material::DIFFUSE, glm::vec3(), glm::vec3(12,12,12) };
 
 const Sphere spheres[] =
 {
-  Sphere { glm::vec3(0.4f, -0.6f, 1.0f), 0.4f, diffuseGreen },
-  Sphere { glm::vec3(-0.4f, -0.6f, 0.0f), 0.4f, mirror },
-  //Sphere { glm::vec3(0.0f, 1.0f, 0.0f), 0.4f, light },
-  //Sphere { glm::vec3(50.0f, 40.8f, 81.6f),   44.2,  glm::vec3(0.0f), glm::vec3(1.0f, 0.0f, 1.0f) },
-  //Sphere { glm::vec3(1e5 + 1, 40.8, 81.6),   1e5,   glm::vec3(0.0f), glm::vec3(.75,.25,.25)      }, // left
-  //Sphere { glm::vec3(-1e5 + 99, 40.8, 81.6), 1e5,   glm::vec3(0.0f), glm::vec3(.25,.25,.75)      }, // right
-  //Sphere { glm::vec3(50, 40.8, 1e5),         1e5f,   glm::vec3(0.0f), glm::vec3(.75,.75,.75)      }, // back
-  //Sphere { glm::vec3(50, 40.8, -1e5 + 170),  1e5f,   glm::vec3(0.0f), glm::vec3(0.0f)             }, // front
-  //Sphere { glm::vec3(50, 1e5, 81.6),         1e5f,   glm::vec3(0.0f), glm::vec3(.75,.75,.75)      }, // bottom
-  //Sphere { glm::vec3(50, -1e5 + 81.6, 81.6), 1e5f,   glm::vec3(0.0f), glm::vec3(.75,.75,.75)      }, // top
-  //Sphere { glm::vec3(27, 16.5, 47),          16.5f,  glm::vec3(0.0f), 0.999f * glm::vec3(1,1,1)   }, // mirror
-  //Sphere { glm::vec3(73, 16.5, 78),          16.5f,  glm::vec3(0.0f), 0.999f * glm::vec3(1,1,1)   }, // glass
-  //Sphere { glm::vec3(50, 681.6-0.27, 81.6),  600.0f, glm::vec3(12.0f, 12.0f, 12.0f), glm::vec3(0.0f), } // light
+  Sphere { glm::vec3(-0.6f, -0.6f, 1.0f), 0.4f, glass },
+  Sphere { glm::vec3(0.0f, -0.6f, 0.0f), 0.4f, mirror },
+  Sphere { glm::vec3(0.6f, -0.6f, 1.0f), 0.4f, diffuseGreen },
+  Sphere { glm::vec3(0.0f, 1.0 + 9.99f, 0.0f), 10.0f, light },
 };
 
 const Plane planes[] =
@@ -171,50 +162,105 @@ bool intersectScene(const Ray& ray, const Object*& hitObj, float& outT)
   return hitObj != nullptr;
 }
 
-glm::vec3 traceImpl(const Ray& ray, int depth, int maxDepth)
+float randf()
 {
-  glm::vec3 col;
+  return rand() / float(RAND_MAX);
+}
 
-  // A directional light
-  const glm::vec3 lightPos = glm::vec3(0.0f, 0.7f, 0.0f);
+glm::vec3 radiance(const Ray& ray, int depth, int maxDepth)
+{
+  if (depth >= maxDepth)
+    return glm::vec3();
+
+  const float PI = 3.1415926535897f;
 
   // Find nearest intersecting sphere
   const Object* nearest = nullptr;
   float nearestT = FLT_MAX;
   intersectScene(ray, nearest, nearestT);
 
-  if (nearest != nullptr)
+  if (nearest == nullptr)
+    return glm::vec3();
+
+  glm::vec3 col = nearest->mat.albedo;
+
+  // Russian roulette
+  float p = glm::max(glm::max(nearest->mat.albedo.x, nearest->mat.albedo.y), nearest->mat.albedo.z);
+  if (depth > 5)
   {
-    HitInfo hitInfo;
-    nearest->getHitInfo(ray, nearestT, hitInfo);
-
-    glm::vec3 L = glm::normalize(lightPos - hitInfo.pos);
-
-    // Shadow ray
-    Ray shadowRay = { hitInfo.pos, L };
-    float lightDist = glm::length(hitInfo.pos - lightPos);
-    const Object* shadowHit; float shadowT;
-    intersectScene(shadowRay, shadowHit, shadowT);
-    bool inShadow = shadowHit != nullptr && shadowT > 0.0f && shadowT < lightDist;
-
-    // point light
-    float ratio = inShadow ? 0.0f : glm::clamp(glm::dot(hitInfo.nrm, L), 0.0f, 1.0f);
-
-    col += glm::vec3(nearest->mat.emissive + ratio * nearest->mat.albedo);
-
-    if (nearest->mat.type == Material::SPECULAR && depth < maxDepth)
-    {
-      Ray reflectionRay = { hitInfo.pos, glm::reflect(ray.d, hitInfo.nrm) };
-      col += 0.5f * traceImpl(reflectionRay, depth+1, maxDepth);
-    }
+    if (randf() < p)
+      col = col * (1.0f / p);
+    else
+      return nearest->mat.emissive;
   }
 
-  return col;
+  HitInfo hitInfo;
+  nearest->getHitInfo(ray, nearestT, hitInfo);
+
+  if (nearest->mat.type == Material::DIFFUSE)
+  {
+    auto mysterious = [](glm::vec3& a, glm::vec3& b)
+    {
+      return glm::vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
+    };
+
+    float r1 = 2 * PI * randf();
+    float r2 = randf();
+    float r2s = sqrt(r2);
+    glm::vec3 w = hitInfo.nrm;
+    glm::vec3 u = glm::normalize(mysterious((fabs(w.x) > .1 ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0)), w));
+    glm::vec3 v = mysterious(w, u);
+    glm::vec3 d = glm::normalize(u * cos(r1) * r2s + v * sin(r1) * r2s + w * sqrt(1 - r2));
+
+    Ray bounceRay = Ray { hitInfo.pos, d };
+
+    return nearest->mat.emissive + col * radiance(bounceRay, depth + 1, maxDepth);
+  }
+  else if (nearest->mat.type == Material::SPECULAR)
+  {
+    Ray reflectionRay = { hitInfo.pos, glm::reflect(ray.d, hitInfo.nrm) };
+    return nearest->mat.emissive + col * radiance(reflectionRay, depth + 1, maxDepth);
+  }
+  else if (nearest->mat.type == Material::DIELECTRIC)
+  {
+    return glm::vec3();
+
+    Ray reflectionRay = { hitInfo.pos, glm::reflect(ray.d, hitInfo.nrm) };
+    glm::vec3 n1 = glm::dot(hitInfo.nrm, ray.d) < 0 ? hitInfo.nrm : -hitInfo.nrm;
+    bool into = glm::dot(hitInfo.nrm, n1) > 0.0f;
+
+    float nc = 1, nt = 1.5, nnt = into ? nc / nt : nt / nc, ddn = glm::dot(ray.d, n1), cos2t;
+
+    // if total internal reflection, reflect
+    if ((cos2t = 1 - nnt * nnt * (1 - ddn * ddn)) < 0) // total internal reflection
+      return nearest->mat.emissive + col * radiance(reflectionRay, depth + 1, maxDepth);
+
+    // otherwise, choose reflection or refraction
+    glm::vec3 tdir = glm::normalize(ray.d * nnt - hitInfo.nrm * ((into ? 1 : -1) * (ddn * nnt + sqrt(cos2t))));
+    float a = nt - nc, b = nt + nc, R0 = a * a / (b * b), c = 1 - (into ? -ddn : glm::dot(tdir, hitInfo.nrm));
+    float Re = R0 + (1 - R0) * c * c * c * c * c, Tr = 1 - Re, P = .25 + .5 * Re, RP = Re / P, TP = Tr / (1 - P);
+
+    Ray ray = Ray { ray.o, tdir };
+
+    return nearest->mat.emissive + col * (depth > 2 ? (randf() < P ?   // Russian roulette 
+      RP * radiance(reflectionRay, depth+1, maxDepth) : TP * radiance(ray, depth+1, maxDepth)) :
+      Re * radiance(reflectionRay, depth+1, maxDepth) + Tr * radiance(ray, depth+1, maxDepth));
+  }
+  else
+  {
+    return glm::vec3();
+  }
 }
 
 void trace(const Ray& ray, glm::vec4& rgba)
 {
-  glm::vec3 col = traceImpl(ray, 0, 5);
+  const int spp = 8;
+  const float avg = (1.0f / spp);
+
+  glm::vec3 col;
+  for (int i = 0; i < spp; ++i)
+    col += avg * radiance(ray, 0, 10);
+
   rgba = glm::vec4(col, 1.0f);
 }
 
@@ -233,6 +279,13 @@ int main(int argc, char** argv)
   float fov = 35.0f;
 
   Ray ray = { glm::vec3(0.0f, 0.0f, 5.0f) };
+
+  float rowPercent = 0.0f;
+  float rowPercentStep = 100.0f / height;
+  float progressStep = 2;
+  float lastProgressVal = 0;
+
+  printf("progress: [");
 
   uint8_t* pix = pixels.data();
   for (int y = 0; y < height; ++y)
@@ -257,7 +310,16 @@ int main(int argc, char** argv)
 
       pix += comp;
     }
+
+    rowPercent += rowPercentStep;
+    if (rowPercent > lastProgressVal + progressStep)
+    {
+      printf("=");
+      lastProgressVal += progressStep;
+    }
   }
+
+  printf("]\n");
 
   int res = stbi_write_png(out, width, height, comp, pixels.data(), width * comp * sizeof(uint8_t));
 
