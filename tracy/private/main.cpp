@@ -4,6 +4,8 @@
 #include <glm.hpp>
 #include "stb_image_write.h"
 
+const float PI = 3.1415926535897f;
+
 struct Ray
 {
   glm::vec3 o, d;
@@ -167,12 +169,45 @@ float randf()
   return rand() / float(RAND_MAX);
 }
 
+// find perpendicular vectors for a normal
+void createCoordinateSpace(const glm::vec3& n, glm::vec3& u, glm::vec3& v)
+{
+  // Plane equation
+  //  A * x + B * y + C * z = D = 0
+  // For the purpose of this, we aren't interested in D, and can set it to 0.
+  // To find a perpendicular vector we can set y to 0, then we can use a cross product to get the other.
+  // For normals where x < y we should use x = 0 instead.
+  if (fabs(n.x) > fabs(n.y))
+    u = glm::normalize(glm::vec3(n.x, 0.0f, -n.x));
+  else
+    u = glm::normalize(glm::vec3(0.0f, -n.z, n.y));
+  v = glm::cross(n, u);
+}
+
+glm::vec3 uniformSampleHemisphere()
+{
+  const float r1 = randf();
+  const float r2 = randf();
+  float sinTheta = sqrtf(1.0f - r1 * r1);
+  float phi = 2 * PI * r2;
+  float x = sinTheta * cosf(phi);
+  float z = sinTheta * sinf(phi);
+  return glm::vec3(x, 1.0f, z);
+}
+
+glm::vec3 transformSample(const glm::vec3& sample, const glm::vec3& n, const glm::vec3& u, const glm::vec3& v)
+{
+  return glm::vec3(
+    sample.x * v.x + sample.y * n.x + sample.z * u.x,
+    sample.x * v.y + sample.y * n.y + sample.z * u.y,
+    sample.x * v.z + sample.y * n.z + sample.z * u.z
+  );
+}
+
 glm::vec3 radiance(const Ray& ray, int depth, int maxDepth)
 {
   if (depth >= maxDepth)
     return glm::vec3();
-
-  const float PI = 3.1415926535897f;
 
   // Find nearest intersecting sphere
   const Object* nearest = nullptr;
@@ -199,20 +234,17 @@ glm::vec3 radiance(const Ray& ray, int depth, int maxDepth)
 
   if (nearest->mat.type == Material::DIFFUSE)
   {
-    auto mysterious = [](glm::vec3& a, glm::vec3& b)
-    {
-      return glm::vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
-    };
+    // Find coordinate space perpendicular to our normal
+    glm::vec3 u, v;
+    createCoordinateSpace(hitInfo.nrm, u, v);
 
-    float r1 = 2 * PI * randf();
-    float r2 = randf();
-    float r2s = sqrt(r2);
-    glm::vec3 w = hitInfo.nrm;
-    glm::vec3 u = glm::normalize(mysterious((fabs(w.x) > .1 ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0)), w));
-    glm::vec3 v = mysterious(w, u);
-    glm::vec3 d = glm::normalize(u * cos(r1) * r2s + v * sin(r1) * r2s + w * sqrt(1 - r2));
+    // Create a random sample about a hemisphere
+    glm::vec3 sample = uniformSampleHemisphere();
 
-    Ray bounceRay = Ray { hitInfo.pos, d };
+    // Transform it into our normal's coordinate space
+    sample = glm::normalize(transformSample(sample, hitInfo.nrm, u, v));
+
+    Ray bounceRay = Ray { hitInfo.pos, sample };
 
     return nearest->mat.emissive + col * radiance(bounceRay, depth + 1, maxDepth);
   }
@@ -254,7 +286,7 @@ glm::vec3 radiance(const Ray& ray, int depth, int maxDepth)
 
 void trace(const Ray& ray, glm::vec4& rgba)
 {
-  const int spp = 8;
+  const int spp = 40;
   const float avg = (1.0f / spp);
 
   glm::vec3 col;
