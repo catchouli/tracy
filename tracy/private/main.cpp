@@ -127,32 +127,13 @@ struct Scene
   std::vector<Plane> planes;
 };
 
-// Materials
-//                        Material type         Albedo                          Emissive
-Material diffuseWhite = { Material::DIFFUSE,    glm::vec3(0.75f),               glm::vec3() };
-Material diffuseRed =   { Material::DIFFUSE,    glm::vec3(0.75f, 0.25f, 0.25f), glm::vec3() };
-Material diffuseBlue =  { Material::DIFFUSE,    glm::vec3(0.25f, 0.25f, 0.75f), glm::vec3() };
-Material diffuseGreen = { Material::DIFFUSE,    glm::vec3(0.25f, 0.75f, 0.25f), glm::vec3() };
-Material mirror =       { Material::SPECULAR,   glm::vec3(0.999f),              glm::vec3() };
-Material glass =        { Material::DIELECTRIC, glm::vec3(0.999f),              glm::vec3() };
-Material light =        { Material::DIFFUSE,    glm::vec3(),                    glm::vec3(0.8f) };
-
-Scene cornellBox =
+// Generates a random float from 0..1
+float randf()
 {
-  {
-    Sphere { glm::vec3(-0.6f, -0.6f, 1.0f), 0.4f, glass },
-    Sphere { glm::vec3(0.0f, -0.6f, 0.0f), 0.4f, mirror },
-    Sphere { glm::vec3(0.6f, -0.6f, 1.0f), 0.4f, diffuseGreen },
-    Sphere { glm::vec3(0.0f, 1.0 + 9.99f, 0.0f), 10.0f, light },
-  },
-  {
-    Plane { glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 0.0f, 1.0f), diffuseWhite }, // back
-    Plane { glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), diffuseRed }, // left
-    Plane { glm::vec3(1.0f,  0.0f, 0.0f), glm::vec3(-1.0f, 0.0f, 0.0f), diffuseBlue }, // right
-    Plane { glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), diffuseWhite }, // bottom
-    Plane { glm::vec3(0.0f,  1.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), diffuseWhite }, // top
-  }
-};
+  static std::default_random_engine e;
+  static std::uniform_real_distribution<float> dis(0, 1); // rage 0 - 1
+  return dis(e);
+}
 
 // Intersect a list of objects, returning hit objects closer than outT as hitObj and updating outT
 // Make sure to initialise outT first (e.g. to FLT_MAX or the max distance), and the hitObj to null
@@ -183,14 +164,6 @@ void intersectScene(const Ray& ray, const Scene& scene, const Object*& hitObj, f
   intersectObjects(ray, scene.planes, hitObj, outT);
 }
 
-// Generates a random float from 0..1
-float randf()
-{
-  static std::default_random_engine e;
-  static std::uniform_real_distribution<float> dis(0, 1); // rage 0 - 1
-  return dis(e);
-}
-
 // Find perpendicular vectors for a normal to construct a coordinate space about it
 void createCoordinateSpace(const glm::vec3& n, glm::vec3& u, glm::vec3& v)
 {
@@ -200,22 +173,10 @@ void createCoordinateSpace(const glm::vec3& n, glm::vec3& u, glm::vec3& v)
   // To find a perpendicular vector we can set y to 0, then we can use a cross product to get the other.
   // For normals where x < y we should use x = 0 instead.
   if (fabs(n.x) > fabs(n.y))
-    u = glm::normalize(glm::vec3(n.x, 0.0f, -n.x));
+    u = glm::vec3(n.z, 0.0f, -n.x) / sqrtf(n.x * n.x + n.z * n.z);
   else
-    u = glm::normalize(glm::vec3(0.0f, -n.z, n.y));
+    u = glm::vec3(0.0f, -n.z, n.y) / sqrtf(n.y * n.y + n.z * n.z);
   v = glm::cross(n, u);
-}
-
-// Random (uniformly distributed) point on a hemisphere
-glm::vec3 uniformSampleHemisphere()
-{
-  const float r1 = randf();
-  const float r2 = randf();
-  float sinTheta = sqrtf(1.0f - r1 * r1);
-  float phi = 2 * PI * r2;
-  float x = sinTheta * cosf(phi);
-  float z = sinTheta * sinf(phi);
-  return glm::vec3(x, 1.0f, z);
 }
 
 // Transforms a vector into a coordinate space obtained from createCoordinateSpace
@@ -226,6 +187,39 @@ glm::vec3 transformIntoSpace(const glm::vec3& sample, const glm::vec3& n, const 
     sample.x * v.y + sample.y * n.y + sample.z * u.y,
     sample.x * v.z + sample.y * n.z + sample.z * u.z
   );
+}
+
+// Generate a uniform hemisphere sample
+void uniformHemisphereSample(glm::vec3& dir, float& pdf)
+{
+  float u1 = randf(), u2 = randf();
+
+  const float r = sqrt(u1);
+  const float theta = 2 * PI * u2;
+
+  const float x = r * cos(theta);
+  const float y = r * sin(theta);
+
+  dir = glm::vec3(x, y, sqrt(glm::max(0.0f, 1 - u1)));
+  pdf = INV_2PI;
+
+  //// Random (uniformly distributed) point on a hemisphere based on two uniform random floats 0..1
+  //// http://www.rorydriscoll.com/2009/01/07/better-sampling/
+  //// Not sure if this actually produces a uniform distribution but it looks better than the function I originally wrote
+  //float u1 = randf(), u2 = randf();
+  //const float r = sqrt(1.0f - u1 * u1);
+  //const float phi = TWO_PI * u2;
+  //dir = glm::vec3(cos(phi) * r, sin(phi) * r, u1);
+
+  //// The probability density function for a uniform distribution is constant
+  //pdf = INV_2PI;
+}
+
+// Calculates the ratio for a lambertian brdf
+// https://computergraphics.stackexchange.com/a/4280
+float lambertBRDF(float cosTheta, const glm::vec3& p)
+{
+  return cosTheta / PI;
 }
 
 // Calculate incoming radiance along ray
@@ -261,23 +255,33 @@ glm::vec3 radiance(const Ray& ray, const Scene& scene, int depth, int maxDepth)
   nearest->getHitInfo(ray, nearestT, hitInfo);
 
   // Compute lambertian materials
+  // https://computergraphics.stackexchange.com/a/4280
   if (nearest->mat.type == Material::DIFFUSE)
   {
+    // Correct normal for ray direction
+    glm::vec3 n = glm::dot(hitInfo.nrm, ray.d) < 0 ? hitInfo.nrm : -hitInfo.nrm;
+
     // Find coordinate space perpendicular to our normal
     glm::vec3 u, v;
-    createCoordinateSpace(hitInfo.nrm, u, v);
+    createCoordinateSpace(n, u, v);
 
     // Create a random sample about a hemisphere
-    glm::vec3 sampleDir = uniformSampleHemisphere();
+    glm::vec3 sampleDir;
+    float pdf;
+    uniformHemisphereSample(sampleDir, pdf);
 
-    // Transform it into our normal's coordinate space
-    sampleDir = glm::normalize(transformIntoSpace(sampleDir, hitInfo.nrm, u, v));
+    // Transform sample dir from tangent space to world
+    sampleDir = sampleDir.z * n + sampleDir.x * u + sampleDir.y * v;
 
-    Ray sampleRay = Ray { hitInfo.pos, sampleDir };
+    // Compute brdf
+    // TODO: for lambert shouldn't this be /2pi
+    glm::vec3 brdf = col;
 
-    glm::vec3 sample = radiance(sampleRay, scene, depth + 1, maxDepth);
+    // Compute radiance
+    glm::vec3 rad = radiance(Ray{ hitInfo.pos, sampleDir }, scene, depth + 1, maxDepth);
 
-    return nearest->mat.emissive + col * sample;
+    // TODO: cosine distribution and / pdf?
+    return nearest->mat.emissive + brdf * rad;
   }
   // Compute specular materials
   else if (nearest->mat.type == Material::SPECULAR)
@@ -288,6 +292,8 @@ glm::vec3 radiance(const Ray& ray, const Scene& scene, int depth, int maxDepth)
   // Compute dialectric materials (currently a disaster area)
   else if (nearest->mat.type == Material::DIELECTRIC)
   {
+    return glm::vec3();
+
     const float airIOR = 1.0f;
     const float glassIOR = 1.5f;
 
@@ -309,7 +315,7 @@ glm::vec3 radiance(const Ray& ray, const Scene& scene, int depth, int maxDepth)
     {
       float rayAngle = acos(rayCos);
       float criticalAngle = asin(eta);
-      if (rayAngle < criticalAngle)
+      if (rayAngle > criticalAngle)
       {
         Ray reflectionRay = { hitInfo.pos, glm::reflect(ray.d, hitInfo.nrm) };
         return nearest->mat.emissive + col * radiance(reflectionRay, scene, depth + 1, maxDepth);
@@ -328,16 +334,65 @@ glm::vec3 radiance(const Ray& ray, const Scene& scene, int depth, int maxDepth)
 // Trace a certain number of samples along a ray in a given scene and return the radiance as rgba
 void trace(const Ray& ray, const Scene& scene, int spp, glm::vec4& rgba)
 {
+  const int maxDepth = 1000;
   const float avg = (1.0f / spp);
-
-  float pdf = INV_2PI;
 
   glm::vec3 col;
   for (int i = 0; i < spp; ++i)
-    col += avg * radiance(ray, scene, 0, 10) / pdf;
+    col += avg * radiance(ray, scene, 0, maxDepth);
 
   rgba = glm::vec4(col, 1.0f);
 }
+
+// Materials
+//                        Material type         Albedo                          Emissive
+Material diffuseWhite = { Material::DIFFUSE,    glm::vec3(0.75f),               glm::vec3() };
+Material diffuseRed =   { Material::DIFFUSE,    glm::vec3(0.75f, 0.25f, 0.25f), glm::vec3() };
+Material diffuseRedW =  { Material::DIFFUSE,    glm::vec3(0.75f, 0.25f, 0.25f), glm::vec3(0.18f) };
+Material diffuseBlue =  { Material::DIFFUSE,    glm::vec3(0.25f, 0.25f, 0.75f), glm::vec3() };
+Material diffuseGreen = { Material::DIFFUSE,    glm::vec3(0.25f, 0.75f, 0.25f), glm::vec3() };
+Material mirror =       { Material::SPECULAR,   glm::vec3(0.999f),              glm::vec3() };
+Material glass =        { Material::DIELECTRIC, glm::vec3(0.999f),              glm::vec3() };
+Material light =        { Material::DIFFUSE,    glm::vec3(),                    glm::vec3(12.0f) };
+
+Scene cornellBox =
+{
+  {
+    Sphere { glm::vec3(-0.6f, -0.6f, 1.0f), 0.4f, glass },
+    Sphere { glm::vec3(0.0f, -0.6f, 0.0f), 0.4f, mirror },
+    Sphere { glm::vec3(0.6f, -0.6f, 1.0f), 0.4f, diffuseGreen },
+    Sphere { glm::vec3(0.0f, 1.0 + 9.99f, 0.0f), 10.0f, light },
+  },
+  {
+    Plane { glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 0.0f, 1.0f), diffuseWhite }, // back
+    Plane { glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), diffuseRed }, // left
+    Plane { glm::vec3(1.0f,  0.0f, 0.0f), glm::vec3(-1.0f, 0.0f, 0.0f), diffuseBlue }, // right
+    Plane { glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), diffuseWhite }, // bottom
+    Plane { glm::vec3(0.0f,  1.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), diffuseWhite }, // top
+  }
+};
+
+Scene leftWall =
+{
+  {
+  },
+  {
+    Plane { glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), diffuseRedW }, // left wall
+  }
+};
+
+
+Scene furnace =
+{
+  {
+    //Sphere { glm::vec3(0.0f), 1.0f, Material{ Material::DIFFUSE, glm::vec3(1.0f), glm::vec3() } },
+    Sphere { glm::vec3(0.0f), 1000.0f, Material{ Material::DIFFUSE, glm::vec3(), glm::vec3(0.18f) } },
+  },
+  {
+    Plane { glm::vec3(-2.0f, 0.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), Material{ Material::DIFFUSE, glm::vec3(), glm::vec3(0.18f) } }, // top
+  }
+};
+
 
 // Entry point - creates a pixel buffer and passes rays to trace()
 int main(int argc, char** argv)
