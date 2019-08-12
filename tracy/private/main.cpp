@@ -98,17 +98,17 @@ public:
   glm::vec3 nrm;
 };
 
-// Plane intersection - note I got this from somewhere but don't remember exactly where
+// Plane intersection
+// https://www.scratchapixel.com/lessons/3d-basic-rendering/minimal-ray-tracer-rendering-simple-shapes/ray-plane-and-ray-disk-intersection
 bool Plane::intersect(const Ray& ray, float& outT) const
 {
   float denom = glm::dot(nrm, ray.d);
-  if (abs(denom) > 0.0001f) // your favorite epsilon
+  if (abs(denom) > 1e-6)
   {
     float t = glm::dot((pos - ray.o), nrm) / denom;
-    if (t >= 0)
-    {
+    if (t >= 1e-6) {
       outT = t;
-      return true; // you might want to allow an epsilon here too
+      return true;
     }
   }
   return false;
@@ -120,11 +120,46 @@ void Plane::getHitInfo(const Ray& ray, const float T, HitInfo& hitInfo) const
   hitInfo.nrm = nrm;
 }
 
+// Disk object
+class Disk : public Plane
+{
+public:
+  Disk(glm::vec3 pos, glm::vec3 normal, float radius, Material mat)
+   : rad(radius), Plane(pos, normal, mat) {}
+
+  bool intersect(const Ray& ray, float& outT) const override;
+
+  float rad;
+};
+
+// Disk intersection
+// https://www.scratchapixel.com/lessons/3d-basic-rendering/minimal-ray-tracer-rendering-simple-shapes/ray-plane-and-ray-disk-intersection
+bool Disk::intersect(const Ray& ray, float& outT) const
+{
+  float t = 0.0f;
+  if (!Plane::intersect(ray, t))
+    return false;
+
+  glm::vec3 p = ray.o + ray.d * t;
+  glm::vec3 v = p - pos;
+  float d2 = glm::dot(v, v);
+
+  if (d2 <= rad * rad)
+  {
+    outT = t;
+    return true;
+  }
+  else
+  {
+    return false;
+  }
+}
+
+
 // Scene definition
 struct Scene
 {
-  std::vector<Sphere> spheres;
-  std::vector<Plane> planes;
+  std::vector<std::shared_ptr<Object>> objects;
 };
 
 // Generates a random float from 0..1
@@ -135,24 +170,6 @@ float randf()
   return dis(e);
 }
 
-// Intersect a list of objects, returning hit objects closer than outT as hitObj and updating outT
-// Make sure to initialise outT first (e.g. to FLT_MAX or the max distance), and the hitObj to null
-// so that you can see if there was an intersection
-template <typename T>
-void intersectObjects(const Ray& ray, const std::vector<T>& objs, const Object*& hitObj, float& outT)
-{
-  for (auto it = objs.begin(); it != objs.end(); ++it)
-  {
-    const Object& obj = *it;
-    float T;
-    if (obj.intersect(ray, T) && T > 0.0f && T < outT)
-    {
-      hitObj = &obj;
-      outT = T;
-    }
-  }
-}
-
 // Tests intersections against a scene description and returns
 // the hit object and distance down the ray as hitObj and outT
 void intersectScene(const Ray& ray, const Scene& scene, const Object*& hitObj, float& outT)
@@ -160,8 +177,16 @@ void intersectScene(const Ray& ray, const Scene& scene, const Object*& hitObj, f
   hitObj = nullptr;
   outT = FLT_MAX;
 
-  intersectObjects(ray, scene.spheres, hitObj, outT);
-  intersectObjects(ray, scene.planes, hitObj, outT);
+  for (auto it = scene.objects.begin(); it != scene.objects.end(); ++it)
+  {
+    const Object& obj = **it;
+    float T;
+    if (obj.intersect(ray, T) && T > 0.0f && T < outT)
+    {
+      hitObj = &obj;
+      outT = T;
+    }
+  }
 }
 
 // Find perpendicular vectors for a normal to construct a coordinate space about it
@@ -358,41 +383,39 @@ Material light =        { Material::DIFFUSE,    glm::vec3(),                    
 Scene cornellBox =
 {
   {
-    Sphere { glm::vec3(-0.6f, -0.6f, 1.0f), 0.4f, glass },
-    Sphere { glm::vec3(0.0f, -0.6f, 0.0f), 0.4f, mirror },
-    Sphere { glm::vec3(0.6f, -0.6f, 1.0f), 0.4f, diffuseGreen },
-    Sphere { glm::vec3(0.0f, 1.0 + 9.99f, 0.0f), 10.0f, light },
+    std::make_shared<Disk>(glm::vec3(0.0f, 0.99f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 0.25f, light),
+
+    std::make_shared<Sphere>(glm::vec3(-0.6f, -0.6f, 1.0f), 0.4f, glass),
+    std::make_shared<Sphere>(glm::vec3(0.0f, -0.6f, 0.0f), 0.4f, mirror),
+    std::make_shared<Sphere>(glm::vec3(0.6f, -0.6f, 1.0f), 0.4f, diffuseGreen),
+    //std::make_shared<Sphere>(glm::vec3(0.0f, 0.0f, 0.0f), 0.5f, light),
+    //std::make_shared<Sphere>(glm::vec3(0.0f, 1.0f + 9.99f, 0.0f), 10.0f, light),
+
+    std::make_shared<Plane>(glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 0.0f, 1.0f), diffuseWhite), // back
+    //std::make_shared<Plane>(glm::vec3(0.0f, 0.0f, 1.0f),  glm::vec3(0.0f, 0.0f, -1.0f), diffuseWhite), // front
+    std::make_shared<Plane>(glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), diffuseRed), // left
+    std::make_shared<Plane>(glm::vec3(1.0f,  0.0f, 0.0f), glm::vec3(-1.0f, 0.0f, 0.0f), diffuseBlue), // right
+    std::make_shared<Plane>(glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), diffuseWhite), // bottom
+    std::make_shared<Plane>(glm::vec3(0.0f,  1.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), diffuseWhite), // top
   },
-  {
-    Plane { glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 0.0f, 1.0f), diffuseWhite }, // back
-    Plane { glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), diffuseRed }, // left
-    Plane { glm::vec3(1.0f,  0.0f, 0.0f), glm::vec3(-1.0f, 0.0f, 0.0f), diffuseBlue }, // right
-    Plane { glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), diffuseWhite }, // bottom
-    Plane { glm::vec3(0.0f,  1.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), diffuseWhite }, // top
-  }
 };
 
 Scene leftWall =
 {
   {
-  },
-  {
-    Plane { glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), diffuseRedW }, // left wall
+    std::make_shared<Plane>(glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), diffuseRedW), // left wall
   }
 };
-
 
 Scene furnace =
 {
   {
-    //Sphere { glm::vec3(0.0f), 1.0f, Material{ Material::DIFFUSE, glm::vec3(1.0f), glm::vec3() } },
-    Sphere { glm::vec3(0.0f), 1000.0f, Material{ Material::DIFFUSE, glm::vec3(), glm::vec3(0.18f) } },
-  },
-  {
-    Plane { glm::vec3(-2.0f, 0.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), Material{ Material::DIFFUSE, glm::vec3(), glm::vec3(0.18f) } }, // top
+    //std::make_shared<Sphere>(glm::vec3(0.0f), 1.0f, Material{ Material::DIFFUSE, glm::vec3(1.0f), glm::vec3() }),
+    std::make_shared<Sphere>(glm::vec3(0.0f), 1000.0f, Material{ Material::DIFFUSE, glm::vec3(), glm::vec3(0.18f) }),
+
+    std::make_shared<Plane>(glm::vec3(-2.0f, 0.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), Material{ Material::DIFFUSE, glm::vec3(), glm::vec3(0.18f) }), // top
   }
 };
-
 
 // Entry point - creates a pixel buffer and passes rays to trace()
 int main(int argc, char** argv)
@@ -409,7 +432,7 @@ int main(int argc, char** argv)
   const Scene& sceneToRender = cornellBox; // The scene to render
   glm::vec3 camPos = glm::vec3(0.0f, 0.0f, 5.0f); // The camera position
   float fov = 35.0f; // The fov in degrees
-  const int spp = 8; // The number of samples to take per pixel
+  const int spp = 160; // The number of samples to take per pixel
 
   // Housekeeping for the progress meter
   float rowPercent = 0.0f;
