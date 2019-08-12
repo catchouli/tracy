@@ -383,7 +383,7 @@ Material light =        { Material::DIFFUSE,    glm::vec3(),                    
 Scene cornellBox =
 {
   {
-    std::make_shared<Disk>(glm::vec3(0.0f, 0.99f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 0.25f, light),
+    std::make_shared<Disk>(glm::vec3(0.0f, 0.99f, 1.0f), glm::vec3(0.0f, -1.0f, 0.0f), 0.25f, light),
 
     std::make_shared<Sphere>(glm::vec3(-0.6f, -0.6f, 1.0f), 0.4f, glass),
     std::make_shared<Sphere>(glm::vec3(0.0f, -0.6f, 0.0f), 0.4f, mirror),
@@ -432,7 +432,7 @@ int main(int argc, char** argv)
   const Scene& sceneToRender = cornellBox; // The scene to render
   glm::vec3 camPos = glm::vec3(0.0f, 0.0f, 5.0f); // The camera position
   float fov = 35.0f; // The fov in degrees
-  const int spp = 160; // The number of samples to take per pixel
+  const int spp = 40; // The number of samples to take per pixel
 
   // Housekeeping for the progress meter
   float rowPercent = 0.0f;
