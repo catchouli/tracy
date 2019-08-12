@@ -1,2 +1,2 @@
-# Hasami
-The renderer abstraction library for kumo
+# Tracy
+A simple c++ path tracer
