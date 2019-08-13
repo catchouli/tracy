@@ -73,7 +73,10 @@ bool Sphere::intersect(const Ray& ray, float& outT) const
   const float t1 = (-b - sqrt(delta)) / 2;
   const float t2 = (-b + sqrt(delta)) / 2;
 
-  outT = (t1 < t2) ? t1 : t2; // get the first intersection only
+  if (t1 < 0.0f)
+    outT = t2;
+  else
+    outT = (t1 < t2) ? t1 : t2; // get the first intersection only
 
   return true;
 }
@@ -303,7 +306,7 @@ glm::vec3 radiance(const Ray& ray, const Scene& scene, int depth, int maxDepth)
 
     // Compute brdf
     // https://computergraphics.stackexchange.com/questions/4277/derivation-of-wikipedias-path-tracing-diffuse-brdf/4280#4280
-    glm::vec3 outgoing = (col / PI) * incoming * glm::dot(sampleDir, n) / INV_2PI;
+    glm::vec3 outgoing = (col / PI) * incoming * glm::dot(sampleDir, n) / pdf;
 
     // Add emissive term
     // TODO: cosine distribution and / pdf?
@@ -318,8 +321,76 @@ glm::vec3 radiance(const Ray& ray, const Scene& scene, int depth, int maxDepth)
   // Compute dialectric materials (currently a disaster area)
   else if (nearest->mat.type == Material::DIELECTRIC)
   {
-    return glm::vec3();
+    const float airIOR = 1.0f;
+    const float glassIOR = 1.5f;
 
+    auto schlick = [](float cosine, float ref_idx) {
+      float r0 = (1.0f - ref_idx) / (1.0f + ref_idx);
+      r0 = r0 * r0;
+      return r0 + (1.0f - r0) * powf((1 - cosine), 5);
+    };
+
+    auto refract = [](const glm::vec3& v, const glm::vec3& n, float ni_over_nt, glm::vec3& refracted) {
+      glm::vec3 uv = glm::normalize(v);
+      float dt = glm::dot(uv, n);
+      float discriminant = 1.0f - ni_over_nt * ni_over_nt * (1.0f - dt * dt);
+      if (discriminant > 0.0f) {
+        refracted = ni_over_nt * (uv - n * dt) - n * sqrt(discriminant);
+        return true;
+      }
+      else {
+        return false;
+      }
+    };
+
+    glm::vec3 attenuation = glm::vec3(1.0f, 1.0f, 1.0f);
+
+    glm::vec3 outward_normal;
+    glm::vec3 reflected = glm::reflect(ray.d, hitInfo.nrm);
+    glm::vec3 refracted;
+
+    float ref_idx;
+
+    float ni_over_nt;
+    float reflect_prob;
+    float cosine;
+
+    if (glm::dot(ray.d, hitInfo.nrm) > 0) {
+      ref_idx = airIOR / glassIOR;
+
+      outward_normal = -hitInfo.nrm;
+      ni_over_nt = ref_idx;
+      cosine = glm::dot(glm::normalize(ray.d), hitInfo.nrm);
+    }
+    else {
+      ref_idx = glassIOR / airIOR;
+
+      outward_normal = hitInfo.nrm;
+      ni_over_nt = 1.0f / ref_idx;
+      cosine = -glm::dot(glm::normalize(ray.d), hitInfo.nrm);
+    }
+
+    if (refract(ray.d, outward_normal, ni_over_nt, refracted)) {
+      reflect_prob = schlick(cosine, ref_idx);
+    }
+    else {
+      reflect_prob = 1.0f;
+    }
+
+    Ray scattered;
+
+    if (randf() < reflect_prob) {
+      scattered = Ray{ hitInfo.pos, reflected };
+    }
+    else {
+      scattered = Ray{ hitInfo.pos, refracted };
+    }
+
+    glm::vec3 incoming = radiance(scattered, scene, depth + 1, maxDepth);
+
+    return incoming;
+
+    /*
     const float airIOR = 1.0f;
     const float glassIOR = 1.5f;
 
@@ -350,6 +421,7 @@ glm::vec3 radiance(const Ray& ray, const Scene& scene, int depth, int maxDepth)
 
     // Give up now, we need to handle remaining reflection/refraction still
     return glm::vec3();
+    */
   }
   else
   {
@@ -389,8 +461,6 @@ Scene cornellBox =
     std::make_shared<Sphere>(glm::vec3(-0.6f, -0.6f, 1.0f), 0.4f, glass),
     std::make_shared<Sphere>(glm::vec3(0.0f, -0.6f, 0.0f), 0.4f, mirror),
     std::make_shared<Sphere>(glm::vec3(0.6f, -0.6f, 1.0f), 0.4f, diffuseGreen),
-    //std::make_shared<Sphere>(glm::vec3(0.0f, 0.0f, 0.0f), 0.5f, light),
-    //std::make_shared<Sphere>(glm::vec3(0.0f, 1.0f + 9.99f, 0.0f), 10.0f, light),
 
     std::make_shared<Plane>(glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 0.0f, 1.0f), diffuseWhite), // back
     //std::make_shared<Plane>(glm::vec3(0.0f, 0.0f, 1.0f),  glm::vec3(0.0f, 0.0f, -1.0f), diffuseWhite), // front
@@ -398,7 +468,16 @@ Scene cornellBox =
     std::make_shared<Plane>(glm::vec3(1.0f,  0.0f, 0.0f), glm::vec3(-1.0f, 0.0f, 0.0f), diffuseBlue), // right
     std::make_shared<Plane>(glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), diffuseWhite), // bottom
     std::make_shared<Plane>(glm::vec3(0.0f,  1.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), diffuseWhite), // top
-  },
+  }
+};
+
+Scene inGlassSphere =
+{
+  {
+    std::make_shared<Disk>(glm::vec3(0.0f, 1.0f, 1.0f), glm::vec3(0.0f, -1.0f, 0.0f), 0.25f, light),
+    //std::make_shared<Sphere>(glm::vec3(), 0.3f, diffuseGreen),
+    std::make_shared<Sphere>(glm::vec3(0.0f, 0.0f, 5.0f), 10.0f, diffuseGreen),
+  }
 };
 
 Scene leftWall =
