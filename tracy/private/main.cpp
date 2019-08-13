@@ -298,15 +298,16 @@ glm::vec3 radiance(const Ray& ray, const Scene& scene, int depth, int maxDepth)
     // Transform sample dir from tangent space to world
     sampleDir = sampleDir.z * n + sampleDir.x * u + sampleDir.y * v;
 
+    // Compute ncoming radiance
+    glm::vec3 incoming = radiance(Ray{ hitInfo.pos, sampleDir }, scene, depth + 1, maxDepth);
+
     // Compute brdf
-    // TODO: for lambert shouldn't this be /2pi
-    glm::vec3 brdf = col;
+    // https://computergraphics.stackexchange.com/questions/4277/derivation-of-wikipedias-path-tracing-diffuse-brdf/4280#4280
+    glm::vec3 outgoing = (col / PI) * incoming * glm::dot(sampleDir, n) / INV_2PI;
 
-    // Compute radiance
-    glm::vec3 rad = radiance(Ray{ hitInfo.pos, sampleDir }, scene, depth + 1, maxDepth);
-
+    // Add emissive term
     // TODO: cosine distribution and / pdf?
-    return nearest->mat.emissive + brdf * rad;
+    return nearest->mat.emissive + outgoing;
   }
   // Compute specular materials
   else if (nearest->mat.type == Material::SPECULAR)
@@ -357,16 +358,16 @@ glm::vec3 radiance(const Ray& ray, const Scene& scene, int depth, int maxDepth)
 }
 
 // Trace a certain number of samples along a ray in a given scene and return the radiance as rgba
-void trace(const Ray& ray, const Scene& scene, int spp, glm::vec4& rgba)
+glm::vec4 trace(const Ray& ray, const Scene& scene, int spp)
 {
-  const int maxDepth = 1000;
+  const int maxDepth = 10;
   const float avg = (1.0f / spp);
 
   glm::vec3 col;
   for (int i = 0; i < spp; ++i)
     col += avg * radiance(ray, scene, 0, maxDepth);
 
-  rgba = glm::vec4(col, 1.0f);
+  return glm::vec4(col, 1.0f);
 }
 
 // Materials
@@ -383,7 +384,7 @@ Material light =        { Material::DIFFUSE,    glm::vec3(),                    
 Scene cornellBox =
 {
   {
-    std::make_shared<Disk>(glm::vec3(0.0f, 0.99f, 1.0f), glm::vec3(0.0f, -1.0f, 0.0f), 0.25f, light),
+    std::make_shared<Disk>(glm::vec3(0.0f, 1.0f, 1.0f), glm::vec3(0.0f, -1.0f, 0.0f), 0.25f, light),
 
     std::make_shared<Sphere>(glm::vec3(-0.6f, -0.6f, 1.0f), 0.4f, glass),
     std::make_shared<Sphere>(glm::vec3(0.0f, -0.6f, 0.0f), 0.4f, mirror),
@@ -430,9 +431,10 @@ int main(int argc, char** argv)
 
   // Render parameters
   const Scene& sceneToRender = cornellBox; // The scene to render
-  glm::vec3 camPos = glm::vec3(0.0f, 0.0f, 5.0f); // The camera position
-  float fov = 35.0f; // The fov in degrees
-  const int spp = 40; // The number of samples to take per pixel
+  const glm::vec3 camPos = glm::vec3(0.0f, 0.0f, 5.0f); // The camera position
+  const float fov = 35.0f; // The fov in degrees
+  const int spp = 500; // The number of samples to take per pixel
+  const int supersamples = 1; // Extra samples to take in each axis
 
   // Housekeeping for the progress meter
   float rowPercent = 0.0f;
@@ -443,23 +445,33 @@ int main(int argc, char** argv)
   // Print first part of progress display
   printf("progress: [");
 
+  // Coefficient for the fov
+  float fovCoeff = tan(fov / 2.0f * PI / 180.0f);
+
   // Iterate over each pixel and trace scene
   uint8_t* pix = pixels.data();
   for (int y = 0; y < height; ++y)
   {
     for (int x = 0; x < width; ++x)
     {
-      // Construct ray based on fov and pixel
-      float px = (2.0f * ((x + 0.5f) / width) - 1.0f) * tan(fov / 2.0f * PI / 180.0f) * aspect;
-      float py = (1.0f - 2.0f * ((y + 0.5f) / height)) * tan(fov / 2.0f * PI / 180.0f);
-      Ray ray = Ray{ camPos, glm::normalize(glm::vec3(px, py, -1.0f)) };
+      glm::vec4 rgba = glm::vec4();
 
-      // Trace ray
-      glm::vec4 rgba;
-      trace(ray, sceneToRender, spp, rgba);
+      for (int sx = 0; sx < supersamples; ++sx)
+      {
+        for (int sy = 0; sy < supersamples; ++sy)
+        {
+          const float ss = 1.0f / supersamples;
+          const float ss2 = 1.0f / (supersamples * supersamples);
 
-      // Clamp result
-      rgba = glm::clamp(rgba, glm::vec4(0.0f), glm::vec4(1.0f));
+          // Construct ray based on fov and pixel
+          float px = (2.0f * ((x + sx * ss) / width) - 1.0f) * fovCoeff * aspect;
+          float py = (1.0f - 2.0f * ((y + sy * ss) / height)) * fovCoeff;
+          Ray ray = Ray{ camPos, glm::normalize(glm::vec3(px, py, -1.0f)) };
+
+          // Trace ray
+          rgba += ss2 * trace(ray, sceneToRender, spp);
+        }
+      }
 
       // Convert to int
       pix[0] = static_cast<uint8_t>(rgba.r * 255.0f);
